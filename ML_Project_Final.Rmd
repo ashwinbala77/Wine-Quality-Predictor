@@ -1,0 +1,630 @@
+---
+title: "Untitled"
+author: "ML Project Team"
+date: "11/15/2021"
+output: html_document
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+#install.packages("sampling")
+library(splitstackshape)
+library(randomForest)
+library(caret)
+library(xgboost)
+```
+
+Load in Bordeaux Wine Data
+```{r}
+wine_data <- read.csv("./BordeauxWines.csv", header=T, stringsAsFactors=T)
+```
+
+Check for missing price values and structure of data
+```{r}
+str(wine_data)
+
+#Price has the variable type factor, hence not showing any NA values
+sum(is.na(wine_data$Price))
+
+#No missing values for the response variable score
+sum(is.na(wine_data$Score))
+```
+
+Visualizing the data and dependent variable
+```{r}
+#Distribution of the Wine Scores
+library(ggplot2)
+g <- ggplot(wine_data, aes(x = Score)) +
+  geom_density(fill = "blue", alpha = 0.5) +
+   theme_set(theme_bw(base_size = 22) ) +
+  theme(panel.grid.major = element_blank(), # Remove grid
+        panel.grid.minor = element_blank(), # Remove grid
+        panel.border = element_blank(), # Remove grid
+        panel.background = element_blank()) + # Remove grid 
+  labs(x = "Score", title = "Distribution of the Scores of the wines")
+g
+
+#Minimum wine score is 60, max is 100. Appears to be a normal distribution between the min and max
+
+#Price of Wine v. Score Distribution
+g_0 <- ggplot(wine_data, # Set dataset 
+              aes(y = Score, # Set y-axis as popularity
+                  x = Price)) + # Set x-axis as loudness and duration 
+  geom_point(alpha = 0.3, color = "blue") + # Use geom_point to get scatter plot
+  geom_smooth(method = "lm") + # Add smoothing line
+  theme_bw() + # Set theme for plot
+  theme(panel.grid.major = element_blank(), # Turn of the background grid
+        panel.grid.minor = element_blank(),
+        panel.border = element_blank(),
+        panel.background = element_blank()) +
+  labs(y = "Score", # Set plot labels
+       x = "Price",
+       title = "Score v Price Dstribution")
+
+g_0
+
+#Doesn't really show that more expensive the wine, the better the score
+```
+
+Creating sub dataset containing no missing values of Price
+```{r}
+wine_data$Wine <- as.character(wine_data$Wine)
+#wine_data$Score <- as.factor(wine_data$Score)
+#wine_data$Price <- as.numeric(gsub("\\$","",(wine_data$Price)))
+
+sum(wine_data$Price == "$NA")
+#4610 missing values of price (~30%), we will create a dataset that removes those missing values
+
+wine_data_1 <- wine_data[!(wine_data$Price == "$NA/750 ml") ,]
+wine_data_2 <- wine_data_1[!(wine_data_1$Price == "$NA") ,] 
+wine_data_3 <- wine_data_2[!(wine_data_2$Price == "$NA/500ml") ,] 
+wine_data_4 <- wine_data_3[!(wine_data_3$Price == "$NA/375ml") ,] 
+```
+
+Creating alternate dataset without the Price Column
+```{r}
+wine_data_5 <- wine_data[,!names(wine_data) %in% c("Price")]
+```
+
+Splitting dataset into test and train using stratified sampling
+```{r}
+#Dataset with the missing Price values removed
+set.seed(123456) # Set seed
+
+#Converting Price from factor to numeric datatype
+wine_data_4$Price <- as.numeric(gsub("\\$","",(wine_data_4$Price)))
+wine_data_4 <- wine_data_4[!(is.na(wine_data_4$Price)),] 
+
+#Removing outlier datapoints from the dataset
+wine_data_4 <- wine_data_4[wine_data_4$Score > 70,]
+
+# Perform stratified sampling
+split_dat <- stratified(wine_data_4, # Set dataset WITH PRICE NO NA'S
+                        group = "Score", # Set variables to use for stratification
+                        size = 0.2,  # Set size of test set
+                        bothSets = TRUE ) # Return both training and test sets
+# Extract train data
+train_dat <- split_dat[[2]]
+# Extract test data
+test_dat <- split_dat[[1]]
+
+# Check size
+nrow(train_dat)
+nrow(test_dat)
+
+#Dataset without the Price Column
+set.seed(123456) # Set seed
+
+wine_data_5 <- wine_data_5[wine_data_5$Score > 70,]
+
+# Perform stratified sampling
+split_dat2 <- stratified(wine_data_5, # Set dataset WITHOUT PRICE 
+                         group = "Score", # Set variables to use for stratification
+                         size = 0.2,  # Set size of test set
+                         bothSets = TRUE ) # Return both training and test sets
+# Extract train data
+train_dat2 <- split_dat2[[2]]
+# Extract test data
+test_dat2 <- split_dat2[[1]]
+
+# Check size
+nrow(train_dat2)
+nrow(test_dat2)
+```
+
+
+Linear Regression Model run for both data sets
+```{r}
+
+# First Dataset - Select all columns except name of wine
+use_dat <- train_dat[, c(2:989)] 
+fit_1 <- lm(use_dat$Score ~., data = use_dat)
+#summary(fit_1)
+lm_pred <- predict(fit_1, newdata = test_dat)
+
+#Calculating RMSE of the first regression model
+rmse1 <- sqrt(mean(fit_1$residuals^2))
+
+# Second Dataset - Select all columns except name of wine
+use_dat2 <- train_dat2[, c(2:988)] 
+fit_2 <- lm(use_dat2$Score ~., data = use_dat2)
+#summary(fit_2)
+lm_pred2 <- predict(fit_2, newdata = test_dat2)
+
+#Calculating RMSE of the second regression model
+rmse2 <- sqrt(mean(fit_2$residuals^2))
+```
+
+rmse1 = 1.54166
+rmse2 = 1.68511
+
+
+Random Forest Model run for both datasets
+```{r}
+summary(train_dat)
+rf_mod <- randomForest(Score ~., # Set tree formula
+                         data = train_dat, # Set dataset
+                         ntree = 200,
+                         nodesize = 1,
+                         mtry = 12) # Set number of trees to use
+
+rf_preds <- predict(rf_mod, test_dat) 
+
+library(Metrics)
+
+#Calculating RMSE of the random forest model
+rmse(test_dat$Score, rf_preds)
+
+g_1 <- ggplot(rf_mod$evaluation, aes(x = test_dat$Score, y = rf_preds))+
+  geom_smooth(alpha = 0.5) +
+  geom_point(alpha = 0.3) +
+  theme_bw() + 
+  theme(panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(), 
+        panel.border = element_blank(), 
+        panel.background = element_blank(),
+        text = element_text(size = 20)) +
+  labs(x = "Actual Score", title = "Actual Score v Predicted Score",
+       y = "Predicted Score", color = "Learning \n Rate", subtitle = "RMSE: 2.1105")  # Set labels
+g_1
+
+#Saving image of the graph
+ggsave(g_1, file ="graph_1.jpeg", width = 8, height = 8, dpi = 600)
+
+summary(train_dat2)
+rf_mod_2 <- randomForest(Score ~., # Set tree formula
+                         data = train_dat2, # Set dataset
+                         ntree = 200,
+                         nodesize = 1,
+                         mtry = 12) # Set number of trees to use
+
+rf_preds_2 <- predict(rf_mod_2, test_dat2) 
+
+rmse(test_dat2$Score, rf_preds_2)
+
+g_2 <- ggplot(rf_mod_2$evaluation, aes(x = test_dat2$Score, y = rf_preds_2))+
+  geom_smooth(alpha = 0.5) +
+  geom_point(alpha = 0.3) +
+  theme_bw() + 
+  theme(panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(), 
+        panel.border = element_blank(), 
+        panel.background = element_blank(),
+        text = element_text(size = 20)) +
+  labs(x = "Actual Score", title = "Actual Score v Predicted Score",
+       y = "Predicted Score", color = "Learning \n Rate", subtitle = "RMSE: 2.2060")  # Set labels
+g_2
+
+ggsave(g_2, file ="graph_2.jpeg", width = 8, height = 8, dpi = 600)
+
+```
+From the results of both the linear regression model and the random forest model, the RMSE of the data set including the price column is lower than that of the model with the price column removed. 
+
+XG Boost Model run for only one of the data sets-- the one containing the Price column not containing the missing values
+```{r}
+# Create training matrix
+dtrain <- xgb.DMatrix(data = as.matrix(train_dat[, c(2, 4:989)]), label = as.numeric(train_dat$Score))
+
+# Create test matrix
+dtest <- xgb.DMatrix(data = as.matrix(test_dat[, c(2, 4:989)]), label = as.numeric(test_dat$Score))
+
+# Set seed
+set.seed(123456)
+
+# Fit initial model
+bst <- xgboost(data = dtrain, # Set training data
+               nrounds = 100, # Set number of rounds
+               verbose = 1, # 1 - Prints out fit
+               print_every_n = 20, # Prints out result every 20th iteration
+               eval_metric = "rmse",
+               nthread = 8,
+) 
+```
+
+TUNING THE PARAMETERS
+
+Tuning Max Depth and Min Child Weight
+```{r}
+
+# Be Careful - This can take a very long time to run
+max_depth_vals <- c(3, 5, 7, 10, 15) # Create vector of max depth values
+min_child_weight <- c(1,3,5,7, 10, 15) # Create vector of min child values
+
+# Expand grid of parameter values
+cv_params <- expand.grid(max_depth_vals, min_child_weight)
+names(cv_params) <- c("max_depth", "min_child_weight")
+
+# Create results vector
+rmse_vec <- rep(NA, nrow(cv_params))
+
+# Loop through results
+for(i in 1:nrow(cv_params)){
+  set.seed(2374)
+  bst_tune <- xgb.cv(data = dtrain, # Set training data
+                     nfold = 5, # Use 5 fold cross-validation
+                     eta = 0.1, # Set learning rate
+                     max.depth = cv_params$max_depth[i], # Set max depth
+                     min_child_weight = cv_params$min_child_weight[i], # Set minimum number of samples in node to split
+                     nrounds = 100, # Set number of rounds
+                     early_stopping_rounds = 20, # Set number of rounds to stop at if there is no improvement
+                     verbose = 1, # 1 - Prints out fit
+                     nthread = 8, # Set number of parallel threads
+                     print_every_n = 20,
+                     eval_metric = "rmse") # Prints out result every 20th iteration
+  rmse_vec[i] <- bst_tune$evaluation_log$test_rmse_mean[bst_tune$best_ntreelimit]
+  
+}
+```
+
+Heatmap to visualize the ideal min child weight and max depth
+```{r}
+# Join results in dataset
+res_db <- cbind.data.frame(cv_params, rmse_vec)
+names(res_db)[3] <- c("rmse") 
+res_db$max_depth <- as.factor(res_db$max_depth) # Convert tree number to factor for plotting
+res_db$min_child_weight <- as.factor(res_db$min_child_weight) # Convert node size to factor for plotting
+# Print RMSE heatmap
+g_3 <- ggplot(res_db, aes(y = max_depth, x = min_child_weight, fill = rmse)) + # set aesthetics
+  geom_tile() + # Use geom_tile for heatmap
+  theme_bw() + # Set theme
+  scale_fill_gradient2(low = "blue", # Choose low color
+                       mid = "white", # Choose mid color
+                       high = "red", # Choose high color
+                       midpoint =mean(res_db$rmse), # Choose mid point
+                       space = "Lab", 
+                       na.value ="grey", # Choose NA value
+                       guide = "colourbar", # Set color bar
+                       aesthetics = "fill") + # Select aesthetics to apply
+  labs(title = "RMSE", x = "Minimum Child Weight", y = "Max Depth", fill = "Scale") # Set labels
+g_3 # Generate plot
+```
+From the heat map, we selected the min child weight of 10 and max depth of 15
+
+Tuning gamma
+```{r}
+gamma_vals <- c(0, 0.05, 0.1, 0.15, 0.2) # Create vector of gamma values
+
+# Be Careful - This can take a very long time to run
+set.seed(111111)
+auc_vec <- error_vec <- rep(NA, length(gamma_vals))
+for(i in 1:length(gamma_vals)){
+  bst_tune <- xgb.cv(data = dtrain, # Set training data
+              nfold = 5, # Use 5 fold cross-validation
+              eta = 0.1, # Set learning rate
+              max.depth = 15, # Set max depth
+              min_child_weight = 10, # Set minimum number of samples in node to split
+              gamma = gamma_vals[i], # Set minimum loss reduction for split
+              nrounds = 109, # Set number of rounds
+              early_stopping_rounds = 20, # Set number of rounds to stop at if there is no improvement
+              verbose = 1, # 1 - Prints out fit
+              nthread = 8, # Set number of parallel threads
+              print_every_n = 20, # Prints out result every 20th iteration
+              eval_metric = "rmse") # Set evaluation metric to use
+  rmse_vec[i] <- bst_tune$evaluation_log$test_rmse_mean[bst_tune$best_ntreelimit]
+  
+}
+
+# Join gamma to values
+cbind.data.frame(gamma_vals, rmse_vec)
+
+```
+From the table created, a gamma of 0.00 was taken
+
+Tuning the subsample and colsample_by_tree parameters 
+```{r}
+# Be Careful - This can take a very long time to run
+subsample <- c(0.6, 0.7, 0.8, 0.9, 1) # Create vector of subsample values
+colsample_by_tree <- c(0.6, 0.7, 0.8, 0.9, 1) # Create vector of col sample values
+
+# Expand grid of tuning parameters
+cv_params <- expand.grid(subsample, colsample_by_tree)
+names(cv_params) <- c("subsample", "colsample_by_tree")
+# Create vectors to store results
+rmse_vec <- rep(NA, nrow(cv_params)) 
+# Loop through parameter values
+for(i in 1:nrow(cv_params)){
+  set.seed(111111)
+  bst_tune <- xgb.cv(data = dtrain, # Set training data
+              
+              nfold = 5, # Use 5 fold cross-validation
+               
+              eta = 0.1, # Set learning rate
+              max.depth = 15, # Set max depth
+              min_child_weight = 10, # Set minimum number of samples in node to split
+              gamma = 0.00, # Set minimum loss reduction for split
+              subsample = cv_params$subsample[i], # Set proportion of training data to use in tree
+              colsample_bytree = cv_params$colsample_by_tree[i], # Set number of variables to use in each tree
+               
+              nrounds = 100, # Set number of rounds
+              early_stopping_rounds = 20, # Set number of rounds to stop at if there is no improvement
+               
+              verbose = 1, # 1 - Prints out fit
+              nthread = 8, # Set number of parallel threads
+              print_every_n = 20, # Prints out result every 20th iteration
+
+              eval_metric = "rmse") # Set evaluation metric to use
+  rmse_vec[i] <- bst_tune$evaluation_log$test_rmse_mean[bst_tune$best_ntreelimit]
+  
+}
+```
+
+```{r}
+res_db <- cbind.data.frame(cv_params, rmse_vec)
+names(res_db)[3] <- c("rmse")
+res_db$subsample <- as.factor(res_db$subsample) # Convert tree number to factor for plotting
+res_db$colsample_by_tree <- as.factor(res_db$colsample_by_tree) # Convert node size to factor for plotting
+g_4 <- ggplot(res_db, aes(y = colsample_by_tree, x = subsample, fill = rmse)) + # set aesthetics
+  geom_tile() + # Use geom_tile for heatmap
+  theme_bw() + # Set theme
+  scale_fill_gradient2(low = "blue", # Choose low color
+    mid = "white", # Choose mid color
+    high = "red", # Choose high color
+    midpoint =mean(res_db$rmse), # Choose mid point
+    space = "Lab",
+    na.value ="grey", # Choose NA value
+    guide = "colourbar", # Set color bar
+    aesthetics = "fill") + # Select aesthetics to apply
+  labs(x = "Subsample", y = "Column Sample by Tree", fill = "RMSE") # Set labels
+g_4 # Generate plot
+```
+From the heatmap, we used a subsample of 0.6 and a colsample of 1
+
+Re-calibrate
+```{r}
+# Use xgb.cv to run cross-validation inside xgboost
+set.seed(111111)
+bst <- xgb.cv(data = dtrain, # Set training data
+              nfold = 5, # Use 5 fold cross-validation
+              eta = 0.1, # Set learning rate
+              max.depth = 15, # Set max depth
+              min_child_weight = 10, # Set minimum number of samples in node to split
+              gamma = 0.00, # Set minimum loss reduction for split
+              subsample = 0.6, # Set proportion of training data to use in tree
+              colsample_bytree =  1, # Set number of variables to use in each tree
+              
+              nrounds = 200, # Set number of rounds
+              early_stopping_rounds = 50, # Set number of rounds to stop at if there is no improvement
+              verbose = 1, # 1 - Prints out fit
+              nthread = 8, # Set number of parallel threads
+              print_every_n = 20, # Prints out result every 20th iteration
+              eval_metric = "rmse") # Set evaluation metric to use
+```
+
+
+Tuning ETA- running the model with 5 possible eta values 
+```{r}
+# Use xgb.cv to run cross-validation inside xgboost
+set.seed(111111)
+bst_mod_1 <- xgb.cv(data = dtrain, # Set training data
+              
+              nfold = 5, # Use 5 fold cross-validation
+               
+              eta = 0.3, # Set learning rate
+              max.depth = 15, # Set max depth
+              min_child_weight = 10, # Set minimum number of samples in node to split
+              gamma = 0.00, # Set minimum loss reduction for split
+              subsample = 0.6, # Set proportion of training data to use in tree
+              colsample_bytree =  1, # Set number of variables to use in each tree
+               
+              nrounds = 100, # Set number of rounds
+              early_stopping_rounds = 20, # Set number of rounds to stop at if there is no improvement
+              verbose = 1, # 1 - Prints out fit
+              nthread = 8, # Set number of parallel threads
+              print_every_n = 20, # Prints out result every 20th iteration
+          
+              eval_metric = "rmse") # Set evaluation metric to use
+```
+
+
+```{r}
+set.seed(111111)
+bst_mod_2 <- xgb.cv(data = dtrain, # Set training data
+              
+              nfold = 5, # Use 5 fold cross-validation
+               
+              eta = 0.1, # Set learning rate
+              max.depth = 15, # Set max depth
+              min_child_weight = 10, # Set minimum number of samples in node to split
+              gamma = 0.00, # Set minimum loss reduction for split
+              subsample = 0.6, # Set proportion of training data to use in tree
+              colsample_bytree =  1, # Set number of variables to use in each tree
+               
+              nrounds = 100, # Set number of rounds
+              early_stopping_rounds = 20, # Set number of rounds to stop at if there is no improvement
+               
+              verbose = 1, # 1 - Prints out fit
+              nthread = 8, # Set number of parallel threads
+              print_every_n = 20, # Prints out result every 20th iteration
+          
+              eval_metric = "rmse") # Set evaluation metric to use
+
+set.seed(111111)
+bst_mod_3 <- xgb.cv(data = dtrain, # Set training data
+              
+              nfold = 5, # Use 5 fold cross-validation
+               
+              eta = 0.05, # Set learning rate
+              max.depth = 15, # Set max depth
+              min_child_weight = 10, # Set minimum number of samples in node to split
+              gamma = 0.00, # Set minimum loss reduction for split
+              subsample = 0.6, # Set proportion of training data to use in tree
+              colsample_bytree =  1, # Set number of variables to use in each tree
+               
+              nrounds = 100, # Set number of rounds
+              early_stopping_rounds = 20, # Set number of rounds to stop at if there is no improvement
+               
+              verbose = 1, # 1 - Prints out fit
+              nthread = 8, # Set number of parallel threads
+              print_every_n = 20, # Prints out result every 20th iteration
+          
+              eval_metric = "rmse") # Set evaluation metric to use
+
+set.seed(111111)
+bst_mod_4 <- xgb.cv(data = dtrain, # Set training data
+              
+              nfold = 5, # Use 5 fold cross-validation
+               
+              eta = 0.01, # Set learning rate
+              max.depth = 15, # Set max depth
+              min_child_weight = 10, # Set minimum number of samples in node to split
+              gamma = 0.00, # Set minimum loss reduction for split
+              subsample = 0.6, # Set proportion of training data to use in tree
+              colsample_bytree =  1, # Set number of variables to use in each tree
+               
+              nrounds = 100, # Set number of rounds
+              early_stopping_rounds = 20, # Set number of rounds to stop at if there is no improvement
+               
+              verbose = 1, # 1 - Prints out fit
+              nthread = 8, # Set number of parallel threads
+              print_every_n = 20, # Prints out result every 20th iteration
+          
+              eval_metric = "rmse") # Set evaluation metric to use
+
+set.seed(111111)
+bst_mod_5 <- xgb.cv(data = dtrain, # Set training data
+              
+              nfold = 5, # Use 5 fold cross-validation
+               
+              eta = 0.005, # Set learning rate
+              max.depth = 15, # Set max depth
+              min_child_weight = 10, # Set minimum number of samples in node to split
+              gamma = 0.00, # Set minimum loss reduction for split
+              subsample = 0.6, # Set proportion of training data to use in tree
+              colsample_bytree =  1, # Set number of variables to use in each tree
+               
+              nrounds = 100, # Set number of rounds
+              early_stopping_rounds = 20, # Set number of rounds to stop at if there is no improvement
+               
+              verbose = 1, # 1 - Prints out fit
+              nthread = 8, # Set number of parallel threads
+              print_every_n = 20, # Prints out result every 20th iteration
+          
+              eval_metric = "rmse") # Set evaluation metric to use
+```
+
+
+```{r}
+# Extract results for model with eta = 0.3
+pd1 <- cbind.data.frame(bst_mod_1$evaluation_log[,c("iter", "test_rmse_mean")], rep(0.3, nrow(bst_mod_1$evaluation_log)))
+names(pd1)[3] <- "eta"
+# Extract results for model with eta = 0.1
+pd2 <- cbind.data.frame(bst_mod_2$evaluation_log[,c("iter", "test_rmse_mean")], rep(0.1, nrow(bst_mod_2$evaluation_log)))
+names(pd2)[3] <- "eta"
+# Extract results for model with eta = 0.05
+pd3 <- cbind.data.frame(bst_mod_3$evaluation_log[,c("iter", "test_rmse_mean")], rep(0.05, nrow(bst_mod_3$evaluation_log)))
+names(pd3)[3] <- "eta"
+# Extract results for model with eta = 0.01
+pd4 <- cbind.data.frame(bst_mod_4$evaluation_log[,c("iter", "test_rmse_mean")], rep(0.01, nrow(bst_mod_4$evaluation_log)))
+names(pd4)[3] <- "eta"
+# Extract results for model with eta = 0.005
+pd5 <- cbind.data.frame(bst_mod_5$evaluation_log[,c("iter", "test_rmse_mean")], rep(0.005, nrow(bst_mod_5$evaluation_log)))
+names(pd5)[3] <- "eta"
+# Join datasets
+plot_data <- rbind.data.frame(pd1, pd2, pd3, pd4, pd5)
+# Converty ETA to factor
+plot_data$eta <- as.factor(plot_data$eta)
+
+# Plot lines
+g_7 <- ggplot(plot_data, aes(x = iter, y = test_rmse_mean, color = eta))+
+  geom_smooth(alpha = 0.5) +
+  theme_bw() + # Set theme
+  theme(panel.grid.major = element_blank(), # Remove grid
+        panel.grid.minor = element_blank(), # Remove grid
+        panel.border = element_blank(), # Remove grid
+        panel.background = element_blank()) + # Remove grid 
+  labs(x = "Number of Trees", title = "RMSE v Number of Trees",
+       y = "RMSE", color = "Learning \n Rate")  # Set labels
+g_7
+```
+From the graph created, we used an eta of 0.3
+
+
+Final Model w Tuned Parameters
+```{r}
+set.seed(111111)
+bst_final <- xgboost(data = dtrain, # Set training data
+                     
+              eta = 0.3, # Set learning rate
+              max.depth = 15, # Set max depth
+              min_child_weight = 10, # Set minimum number of samples in node to split
+              gamma = 0.00, # Set minimum loss reduction for split
+              subsample =  0.9, # Set proportion of training data to use in tree
+              colsample_bytree = 0.9, # Set number of variables to use in each tree
+              
+              nrounds = 150, # Set number of rounds
+              early_stopping_rounds = 20, # Set number of rounds to stop at if there is no improvement
+              
+              verbose = 1, # 1 - Prints out fit
+              nthread = 1, # Set number of parallel threads
+              print_every_n = 20, # Prints out result every 20th iteration
+              
+              eval_metric = "rmse") # Set evaluation metric to use
+
+
+boost_preds_final <- predict(bst_final, dtrain) # Create predictions for XGBoost model on training data
+pred_dat <- cbind.data.frame(boost_preds_final, train_dat$Score)
+names(pred_dat) <- c("predictions", "response")
+
+boost_preds_final <- predict(bst_final, dtest) # Create predictions for XGBoost model
+
+pred_dat <- cbind.data.frame(boost_preds_final , test_dat$Score)
+
+# Convert predictions to classes, using optimal cut-off
+boost_pred_class <- rep(0, length(boost_preds_final))
+boost_pred_class[boost_preds_final >= 0.5] <- 1
+
+t <- table(boost_pred_class, test_dat$Score) # Create table
+
+# Extract importance matrix
+imp_mat <- xgb.importance(model = bst_final)
+# Plot importance (top 10 variables)
+xgb.plot.importance(imp_mat, top_n = 10)
+```
+
+Creating the SHAP Importance
+```{r}
+source("a_insights_shap_functions.r")
+```
+
+```{r}
+# Calculate SHAP importance
+shap_result <- shap.score.rank(xgb_model = bst_final, 
+                X_train =as.matrix(train_dat[, c(2, 4:989)]),
+                shap_approx = F)
+# Plot SHAP importance
+library(tibble)
+var_importance(shap_result, top_n=10)
+```
+
+```{r}
+shap_long = shap.prep(shap = shap_result,
+                           X_train = as.matrix(train_dat[, c(2, 4:989)]), 
+                           top_n = 20)
+
+plot.shap.summary(data_long = shap_long)
+```
+
+
+
+
